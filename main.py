@@ -1,19 +1,5 @@
 # cite: https://github.com/SmartFlowAI/Llama3-XTuner-CN/blob/main/web_demo.py
 # cite: https://github.com/CrazyBoyM/llama3-Chinese-chat
-
-import copy
-import warnings
-import streamlit as st
-import torch
-from torch import nn
-from dataclasses import asdict, dataclass
-from typing import Callable, List, Optional
-from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList
-from transformers.utils import logging
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig  # isort: skip
-from peft import PeftModel
-from utils.base_function import Color
-
 """
 :copy: 供了用于浅复制和深复制可变对象的功能, 代码中使用了copy.deepcopy() 用于创建一个对象及其包含的对象的完整拷贝。
 :warnings: 用于发出警告，以提示程序的某些问题，而不是抛出异常。
@@ -35,10 +21,23 @@ from utils.base_function import Color
     Color 定义了常见的ASCII颜色转义符
 """
 
-logger = logging.get_logger(__name__)  # 初始化日志设置
+import copy
+import warnings
+import streamlit as st
+import torch
+from torch import nn
+from dataclasses import asdict, dataclass
+from typing import Callable, List, Optional
+from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList
+from transformers.utils import logging
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig  # isort: skip
+from peft import PeftModel
+from utils.base_function import Color
 
 # 此函数可用于设置其他页面属性，如布局和初始侧边栏状态，但在此代码段中仅设置了页面标题。
 st.set_page_config(page_title="Academic Code Annotator (with LLAMA3 😊)")  # Streamlit 页面配置:设置了页面的标题
+
+logger = logging.get_logger(__name__)  # 初始化日志设置
 
 
 @dataclass
@@ -47,7 +46,7 @@ class GenerationConfig:
     此配置用于聊天，以提供对话的多样性
     """
     max_length: int = 65535  # 定义生成文本的最大长度为 65535 个字符。这是生成过程中可以生成的字符的绝对上限。
-    # max_new_tokens: int = 600  # 设置生成调用中新生成的最大令牌数（例如，单词或标点符号）。这有助于控制输出文本的大小。
+    max_new_tokens: int = 600  # 设置生成调用中新生成的最大令牌数（例如，单词或标点符号）。这有助于控制输出文本的大小。
     top_p: float = 0.8  # 生成文本时的随机采样策略。top_p 为 0.8 表示在每一步，只考虑累积概率质量至少占总概率质量 80% 的最高概率的词汇。
     temperature: float = 0.8  # 控制生成过程的随机性。温度越低，输出越倾向于高概率选项。0.8 是一个使输出既随机又可靠的中间值。
     do_sample: bool = True  # 是否在生成时使用采样策略。设置为 True 表示启用采样，这通常与 top_p 或 temperature 结合以增加输出的多样性。
@@ -262,10 +261,10 @@ def load_model(model_name_or_path, adapter_name_or_path=None, load_in_4bit=False
         model_name_or_path,  # 指定模型的名称或模型文件的路径。
         load_in_4bit=load_in_4bit,  # 指定是否在 4 位量化模式下加载模型, 可以显著减少模型的内存占用。
         trust_remote_code=True,  # 在加载远程或自定义模型时，是否信任和执行模型文件中包含的自定义代码。
-        low_cpu_mem_usage=False,  # 这个选项在加载模型时减少 CPU 内存的使用。适用于内存资源受限的环境。
+        low_cpu_mem_usage=True,  # 这个选项在加载模型时减少 CPU 内存的使用。适用于内存资源受限的环境。
         torch_dtype=torch.float16,  # 指定模型使用的 PyTorch 数据类型。
         device_map='auto',  # 指定模型应该加载到哪个设备上。'auto' 表示自动选择最合适的设备。
-        quantization_config=quantization_config  # 提供量化配置，这是通过 BitsAndBytesConfig 或其他相关配置类设置的。
+        # quantization_config=quantization_config  # 提供量化配置，这是通过 BitsAndBytesConfig 或其他相关配置类设置的。
     )
     # 如果提供了适配器路径或名称，则加载一个 PeftModel，这是一种支持适配器的模型，可以用来增强或调整原有模型的行为。
     if adapter_name_or_path is not None:
@@ -319,15 +318,15 @@ system_prompt = '<|begin_of_text|><<SYS>>\n{content}\n<</SYS>>\n\n'
 user_prompt = '<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>'
 robot_prompt = '<|start_header_id|>assistant<|end_header_id|>\n\n{robot}<|eot_id|>'
 cur_query_prompt = '<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'
-"""
-:system_prompt: 系统提示模板。它用来封装一些系统级的信息或指令，可能用于控制或指导生成模型的行为。
-    使用 <<SYS>> 和 <</SYS>> 标签来明确地标识包围的内容是系统级的。
-    {content} 是一个占位符，用于插入实际的系统信息或指令。这样的设计使得模板可以灵活地用于不同的系统信息。
-    模板包含换行符 (\n) 以保持清晰的格式化输出。
-:user_prompt: 用户输入的格式模板。它标记了一个用户发言的开始。
-:robot_prompt: 类似于 user_prompt，助手或机器人回应的格式模板。
-:cur_query_prompt: 这是一个用于当前查询的复合提示模板，它结合了用户的发言和助手的响应
-"""
+# """
+# :system_prompt: 系统提示模板。它用来封装一些系统级的信息或指令，可能用于控制或指导生成模型的行为。
+#     使用 <<SYS>> 和 <</SYS>> 标签来明确地标识包围的内容是系统级的。
+#     {content} 是一个占位符，用于插入实际的系统信息或指令。这样的设计使得模板可以灵活地用于不同的系统信息。
+#     模板包含换行符 (\n) 以保持清晰的格式化输出。
+# :user_prompt: 用户输入的格式模板。它标记了一个用户发言的开始。
+# :robot_prompt: 类似于 user_prompt，助手或机器人回应的格式模板。
+# :cur_query_prompt: 这是一个用于当前查询的复合提示模板，它结合了用户的发言和助手的响应
+# """
 
 
 def combine_history(prompt):
@@ -421,6 +420,7 @@ def main(model_name_or_path, adapter_name_or_path):
 if __name__ == '__main__':
     # 导入 Python 的系统模块 sys，它包含了与 Python 解释器和它的环境有关的功能，比如命令行参数。
     import sys
+
     # sys.argv 是一个列表，包含了命令行参数。sys.argv[0] 是脚本名，sys.argv[1] 通常是第一个参数，这里被用来指定模型的名称或路径。
     model_name_or_path = sys.argv[1]
     # 这里检查 sys.argv 的长度是否大于等于 3，以确定是否有第二个命令行参数提供（即 sys.argv[2]）。如果有，将其作为适配器的名称或路径。
