@@ -11,5 +11,5 @@ streamlit run deploy/web_streamlit_for_v1.py /path/to/model
 ```
 
 ```shell
-streamlit run main.py ../llama3Model/Llama3-Chinese
+streamlit run web_chat.py ../llama3Model/Llama3-Chinese
 ```

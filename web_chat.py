@@ -306,6 +306,7 @@ def prepare_generation_config():
         repetition_penalty = st.slider("重复惩罚系数", 1.0, 2.0, 1.07, step=0.01)  # 用于降低重复内容的发生。
         st.button('重置聊天', on_click=on_btn_click)  # 创建一个按钮，当被点击时触发 on_btn_click 函数，该函数可以用来重置聊天状态或清除会话数据。
 
+
     generation_config = GenerationConfig(max_new_tokens=max_new_tokens,
                                          top_p=top_p,
                                          temperature=temperature,
