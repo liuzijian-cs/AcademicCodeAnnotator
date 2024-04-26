@@ -1,4 +1,5 @@
 import copy
+import shutil
 import time
 import warnings
 import streamlit as st
@@ -67,33 +68,6 @@ def generate_interactive(  # 生成回复
         eos_token_id.append(additional_eos_token_id)
     has_default_max_length = kwargs.get(
         'max_length') is None and generation_config.max_length is not None
-    # 如果满足 has_default_max_length 且 max_new_tokens 未设置，将发出警告。
-    # 这说明用户依赖于过时的配置方法来限制生成长度，这种做法在未来的版本中将不再支持。
-    if has_default_max_length and generation_config.max_new_tokens is None:
-        warnings.warn(
-            f"Using 'max_length''s default ({repr(generation_config.max_length)}) \
-                    to control the generation length. "
-            'This behaviour is deprecated and will be removed from the \
-                config in v5 of Transformers -- we'
-            ' recommend using `max_new_tokens` to control the maximum \
-                length of the generation.',
-            UserWarning,
-        )
-    # 如果 max_new_tokens 被设置，它将根据输入 ID 的序列长度调整 max_length 的值。这保证生成的长度与输入长度和新生成的 token 数量相适应。
-    elif generation_config.max_new_tokens is not None:
-        generation_config.max_length = generation_config.max_new_tokens + \
-                                       input_ids_seq_length
-        if not has_default_max_length:
-            # 如果 max_length 和 max_new_tokens 都被设置，将发出警告，告知用户 max_new_tokens 将优先使用，并推荐查阅相关文档了解更多信息。
-            logger.warning(  # pylint: disable=W4902
-                f"Both 'max_new_tokens' (={generation_config.max_new_tokens}) "
-                f"and 'max_length'(={generation_config.max_length}) seem to "
-                "have been set. 'max_new_tokens' will take precedence. "
-                'Please refer to the documentation for more information. '
-                '(https://huggingface.co/docs/transformers/main/'
-                'en/main_classes/text_generation)',
-                UserWarning,
-            )
     # 最后这部分检查输入的长度是否超过了设置的最大长度 (max_length)。
     # 如果是这样，将记录一条警告，指出这可能导致意外的行为，并建议增加 max_new_tokens 的值以避免这种情况。
     if input_ids_seq_length >= generation_config.max_length:
@@ -187,10 +161,78 @@ def on_btn_click():  # 重置聊天按钮逻辑
     del st.session_state.messages
 
 
+def analyze_paper(paper_file_path ):
+    """
+    分析论文
+    """
+    from utils.PDFplumber import get_chapter
+    str1, str2 = get_chapter(paper_file_path)
+    prompt = "请使用中文帮助我尽可能详细的总结这篇论文，可以包含这篇文章的背景信息，使用的方法，现有方法局限性（或提出问题），本文的贡献，以及总结：\n"
+    real_prompt = combine_history(prompt + str1 + str2)
+    return real_prompt
+
+
+def clean_up_files():
+    """删除 tmp 目录下的所有文件，确保每次会话开始时环境干净。"""
+    folder = 'tmp'
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
+
+
+def read_code_file(file_path):
+    """
+    读取指定路径的文件并返回其内容。
+    :param file_path: 文件的路径
+    :return: 文件的内容
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except Exception as e:
+        print(f"Error reading file {file_path}: {e}")
+        return None
+
+
+# def analyze_code(code_file_path):
+#     """
+#     分析Python代码文件，使用模型对代码进行处理或生成注释。
+#     """
+#     print(f"{Color.C}[Function analyze_code]{Color.RE}{Color.P} Analyzing code...{Color.RE}")
+#     prompt_list = []
+#     code_content = read_code_file(code_file_path)
+#     lines = code_content.split('\n\n')
+#
+#     for i in range(0, len(lines), 20):  # 代码每次送20行
+#         segment_lines = lines[i:i + 20]
+#         segment_text = '\n'.join(segment_lines)
+#         prompt = f"使用中文逐行注释代码，仅输出注释后的代码："
+#         full_prompt = prompt + segment_text
+#         print(f"{i}\n{Color.C}{full_prompt}{Color.RE}")
+#         prompt_list.append(full_prompt)
+#     return prompt_list
+
 def analyze_code(code_file_path):
-    # TODO 代码分析逻辑
-    print(f"{Color.C}[Function analyze_code]{Color.RE}{Color.P} Analyzing code...{Color.RE}")
-    pass
+    """
+    分析Python代码文件，使用模型对代码进行处理或生成注释。
+    """
+    print("[Function analyze_code] Analyzing code...")
+    prompt_list = []
+    code_content = read_code_file(code_file_path)
+    code_segments = code_content.split('\n\n')  # 使用两个空行分割代码段
+
+    for segment_text in code_segments:
+        prompt = "使用中文逐行注释代码，保留源格式，仅输出注释后的代码："
+        full_prompt = prompt + segment_text
+        print(full_prompt)
+        prompt_list.append(full_prompt)
+    return prompt_list
 
 
 @st.cache_resource  # 这个函数使用 @st.cache_resource 装饰器，使得 Streamlit 可以缓存该函数的结果。
@@ -228,52 +270,31 @@ def load_model(model_name_or_path, adapter_name_or_path=None, load_in_4bit=False
     return model, tokenizer
 
 
-def prepare_generation_config():
+def prepare_generation_config(model, tokenizer):
     """
     这段代码定义了一个函数 prepare_generation_config()，用于在 Streamlit 应用中配置和显示文本生成相关的超参数。
     该函数利用 Streamlit 的 UI 组件在侧边栏中创建一个交互式的控制面板。
     :return: 返回这个配置对象，使其可以在其他部分的应用中用于控制文本生成行为。
     """
-    with st.sidebar:  # 语句指定接下来的 Streamlit 组件将显示在应用的侧边栏中。
-        st.title('🐳请在此处上传论文~')
-        uploaded_paper = st.file_uploader("请上传论文（PDF）", type=['pdf'])
-        if uploaded_paper is not None:
-            with open(os.path.join("tmp", uploaded_paper.name), "wb") as f:
-                f.write(uploaded_paper.getbuffer())
-            st.success("🗂️论文上传成功：{}".format(uploaded_paper.name))
-
-            uploaded_code = st.file_uploader("🐳请上传论文对应的Python代码（PY）", type=['py'])
-            if uploaded_code is not None:
-                code_path = os.path.join("tmp", uploaded_code.name)
-                with open(code_path, "wb") as f:
-                    f.write(uploaded_code.getbuffer())
-                st.success("🗂️代码上传成功：{}".format(uploaded_code.name))
-
-                # 显示进度条并分析代码
-                with st.spinner('正在分析代码...'):
-                    analysis_result = analyze_code(code_path)
-                    st.success("分析完成")
-
-                # 允许下载分析后的代码
-                st.download_button(
-                    label="下载代码",
-                    data=uploaded_code.getvalue(),
-                    file_name=uploaded_code.name,
-                    mime='text/plain'
-                )
-        st.title('参数面板')
-        max_new_tokens = st.slider('最大回复长度', 100, 32768, 8192, step=32)  # 控制生成的最大长度。
-        top_p = st.slider('Top P', 0.0, 1.0, 0.8, step=0.01)  # 设置采样的 softmax 概率阈值，用于控制文本多样性。
-        temperature = st.slider('温度系数', 0.0, 1.0, 0.7, step=0.01)  # 调节随机性的大小，影响生成文本的一致性和多样性。
-        repetition_penalty = st.slider("重复惩罚系数", 1.0, 2.0, 1.07, step=0.01)  # 用于降低重复内容的发生。
-        st.button('重置聊天', on_click=on_btn_click)  # 创建一个按钮，当被点击时触发 on_btn_click 函数，该函数可以用来重置聊天状态或清除会话数据。
-
-    generation_config = GenerationConfig(max_new_tokens=max_new_tokens,
-                                         top_p=top_p,
-                                         temperature=temperature,
-                                         repetition_penalty=repetition_penalty,
+    max_new_tokens, top_p, temperature, repetition_penalty = None, None, None, None
+    generation_config = GenerationConfig(max_new_tokens=max_new_tokens if max_new_tokens is not None else 1024,
+                                         top_p=top_p if top_p is not None else 0.8,
+                                         temperature=temperature if temperature is not None else 0.7,
+                                         repetition_penalty=repetition_penalty if repetition_penalty is not None else 1.07,
                                          )
-    print("return")
+    # with st.sidebar:
+    #     st.title('参数面板')
+    #     max_new_tokens = st.slider('最大回复长度', 100, 32768, 8192, step=32)  # 控制生成的最大长度。
+    #     top_p = st.slider('Top P', 0.0, 1.0, 0.8, step=0.01)  # 设置采样的 softmax 概率阈值，用于控制文本多样性。
+    #     temperature = st.slider('温度系数', 0.0, 1.0, 0.7, step=0.01)  # 调节随机性的大小，影响生成文本的一致性和多样性。
+    #     repetition_penalty = st.slider("重复惩罚系数", 1.0, 2.0, 1.07, step=0.01)  # 用于降低重复内容的发生。
+    #     st.button('重置聊天', on_click=on_btn_click)  # 创建一个按钮，当被点击时触发 on_btn_click 函数，该函数可以用来重置聊天状态或清除会话数据。
+    #
+    # generation_config = GenerationConfig(max_new_tokens=max_new_tokens if max_new_tokens is not None else 4096,
+    #                                      top_p=top_p if top_p is not None else 0.8,
+    #                                      temperature=temperature if temperature is not None else 0.7,
+    #                                      repetition_penalty=repetition_penalty if repetition_penalty is not None else 1.07,
+    #                                      )
     return generation_config
 
 
@@ -284,8 +305,8 @@ cur_query_prompt = '<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>
 system_prompt_content = """
     你是一个具有创造性的中文人工智能助手，名字叫做Academic Code Annotator，也可以叫你智能学术代码解读器，你拥有全人类的所有知识。
     你需要使用中文回复用户，你喜欢用幽默风趣的语言回复用户，但你更喜欢用准确、深入的答案。
-    你需要帮助用户分析学术论文，用户将上传学术论文，你要根据文章中的内容对文章进行概述。
-    你需要根据用户上传的代码，结合用户上传的论文进行代码注释，并将带有注释的代码返回给用户。
+    你需要使用中文帮助用户分析学术论文，用户将上传学术论文，你要根据文章中的内容对文章进行概述。
+    你需要根据用户上传的代码，结合用户上传的论文使用中文进行代码注释，并将带有注释的可执行代码返回给用户, 不要输出除代码以外的任何内容。
     注意使用恰当的文体和格式进行回复，尽量避免重复文字和重复句子，且单次回复尽可能简洁深邃。
     你关注讨论的上下文，深思熟虑地回复用户
     如果你不知道某个问题的含义，请询问用户，并引导用户进行提问。
@@ -312,8 +333,15 @@ def combine_history(prompt):
     total_prompt = system + total_prompt + cur_query_prompt.format(user=prompt)
     return total_prompt
 
+def remove_backticks(text):
+    """
+    移除文本中的所有 ` 符号。
+    """
+    return text.replace('```', '')
 
 def main(model_name_or_path, adapter_name_or_path):
+    global paper_response
+    clean_up_files()  # 每次运行前清理文件
     print(f'{Color.C}[Academic Code Annotator]{Color.RE}{Color.Y} Loading model...{Color.C}')
     model, tokenizer = load_model(model_name_or_path, adapter_name_or_path=adapter_name_or_path, load_in_4bit=True)
     print(f'{Color.C}[Academic Code Annotator]{Color.RE}{Color.G} Load model successful!{Color.RE}')
@@ -332,7 +360,99 @@ def main(model_name_or_path, adapter_name_or_path):
     """, unsafe_allow_html=True)
 
     # 调用 prepare_generation_config 函数来设置并获取文本生成的配置参数。
-    generation_config = prepare_generation_config()
+    generation_config = prepare_generation_config(model, tokenizer)
+
+    if 'uploaded_papers' not in st.session_state:
+        st.session_state.uploaded_papers = {}
+        st.session_state.uploaded_codes={}
+
+    if 'paper_response' not in st.session_state:
+        st.session_state.paper_response = None
+
+    with st.sidebar:  # 语句指定接下来的 Streamlit 组件将显示在应用的侧边栏中。
+        st.title('🐳请在此处上传论文~')
+        uploaded_paper = st.file_uploader("🐳请上传论文（PDF）", type=['pdf'])
+        if uploaded_paper is not None:
+            paper_file_path = os.path.join("tmp", uploaded_paper.name)
+            if uploaded_paper.name not in st.session_state.uploaded_papers:
+                with open(paper_file_path, "wb") as f:
+                    f.write(uploaded_paper.getbuffer())
+                st.session_state.uploaded_papers[uploaded_paper.name] = 'uploaded'  # 标记文件为已上传
+                st.success("🗂️论文上传成功：{}".format(uploaded_paper.name))
+                paper_prompt = analyze_paper(os.path.abspath(paper_file_path))
+                paper_prompt = combine_history(paper_prompt)
+
+                with st.chat_message('robot'):
+                    message_placeholder = st.empty()
+                    # 使用 generate_interactive 函数生成回复，期间通过 message_placeholder 实时更新显示的内容。
+                    for cur_response in generate_interactive(
+                            model=model,
+                            tokenizer=tokenizer,
+                            prompt=paper_prompt,
+                            additional_eos_token_id=128009,
+                            **asdict(generation_config),
+                    ):
+                        # 在聊天消息容器中显示机器人响应
+                        message_placeholder.markdown(cur_response + '▌')
+                    message_placeholder.markdown(cur_response)
+                # 完成生成后，将机器人的最终回复添加到会话状态。
+                st.session_state.messages.append({
+                    'role': 'robot',
+                    'content': cur_response,  # pylint: disable=undefined-loop-variable
+                })
+
+                st.session_state.paper_response = cur_response
+                message_placeholder.empty()
+
+        if st.session_state.paper_response:
+            st.write(st.session_state.paper_response)  # Display the response persistently
+
+        st.title('🐳请在上传论文后上传代码~')
+        uploaded_code = st.file_uploader("🐳请上传论文对应的Python代码（PY）", type=['py'])
+        if uploaded_code is not None:
+            code_path = os.path.join("tmp", uploaded_code.name)
+            annotated_file_path = None
+            if uploaded_code.name not in st.session_state.uploaded_codes:
+                with open(code_path, "wb") as f:
+                    f.write(uploaded_code.getbuffer())
+                st.session_state.uploaded_codes[uploaded_code.name] = 'uploaded'  # 标记文件为已上传
+                st.success("🗂️代码上传成功：{}".format(uploaded_code.name))
+                # 显示进度条并分析代码
+                with st.spinner('正在分析代码...'):
+                    annotated_code = []  # 初始化一个空列表以存储注释过的代码
+                    code_prompts = analyze_code(code_path)
+                    progress_bar = st.progress(0)  # 创建进度条
+                    # annotated_file_path = code_path.replace('.py', '_annotated.py')  # 提前定义路径
+                    # message_placeholder = st.text_area("", value="", height=200)
+                    for i, code_prompt in enumerate(code_prompts):
+                        code_prompt = combine_history(code_prompt)
+                        for cur_response in generate_interactive(
+                                model=model,
+                                tokenizer=tokenizer,
+                                prompt=code_prompt,
+                                additional_eos_token_id=128009,
+                                **asdict(generation_config),
+                        ):
+                            # # 在聊天消息容器中显示机器人响应
+                            # message_placeholder += cur_response + '▌'
+                            pass
+                        annotated_code.append(remove_backticks(cur_response))
+                        torch.cuda.empty_cache()
+                        # 更新进度条
+                        progress_bar.progress((i + 1) / len(code_prompts))
+                    # 将所有注释过的代码段写入一个新文件
+                    annotated_file_path = code_path.replace('.py', '_annotated.py')
+                    with open(annotated_file_path, 'w', encoding='utf-8') as file:
+                        file.write('\n'.join(annotated_code))  # 将列表中的所有代码段合并并写入文件
+                    st.success("😎分析完成")
+                    print(annotated_file_path)
+                    if annotated_file_path:
+                        st.download_button(
+                            label="⏬下载注释过的代码⏬",
+                            data=open(annotated_file_path, "rb").read(),
+                            file_name=os.path.basename(annotated_file_path),
+                            mime='text/plain'
+                        )
 
     # 初始化聊天历史 (本工作暂时不考虑历史消息)
     if 'messages' not in st.session_state:
@@ -381,6 +501,7 @@ if __name__ == '__main__':
     # 导入 Python 的系统模块 sys，它包含了与 Python 解释器和它的环境有关的功能，比如命令行参数。
     import sys
 
+    paper_response = None
     # sys.argv 是一个列表，包含了命令行参数。sys.argv[0] 是脚本名，sys.argv[1] 通常是第一个参数，这里被用来指定模型的名称或路径。
     model_name_or_path = sys.argv[1]
     # 这里检查 sys.argv 的长度是否大于等于 3，以确定是否有第二个命令行参数提供（即 sys.argv[2]）。如果有，将其作为适配器的名称或路径。
