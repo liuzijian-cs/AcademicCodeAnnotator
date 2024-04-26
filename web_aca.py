@@ -1,4 +1,5 @@
 import copy
+import time
 import warnings
 import streamlit as st
 import torch
@@ -26,7 +27,7 @@ logger = logging.get_logger(__name__)
 @dataclass
 class GenerationConfig:
     max_length: int = 65535  # 定义生成文本的最大长度为 65535 个字符。
-    max_new_tokens: int = 600  # 设置生成调用中新生成的最大Token。
+    max_new_tokens: int = 32768  # 设置生成调用中新生成的最大Token。
     top_p: float = 0.8  # 生成文本时的随机采样策略。top_p 为 0.8 表示在每一步，只考虑累积概率质量至少占总概率质量 80% 的最高概率的词汇。
     temperature: float = 0.8  # 控制生成过程的随机性。温度越低，输出越倾向于高概率选项。0.8 是一个使输出既随机又可靠的中间值。
     do_sample: bool = True  # 是否在生成时使用采样策略。设置为 True 表示启用采样，这通常与 top_p 或 temperature 结合以增加输出的多样性。
@@ -201,18 +202,15 @@ def load_model(model_name_or_path, adapter_name_or_path=None, load_in_4bit=False
     :return: 返回加载的模型和分词器
     """
     # 强制int4模式：
-    if load_in_4bit:  # 4Bit模式
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,  # 量化过程中使用的计算数据类型。
-            bnb_4bit_use_double_quant=True,  # 这个参数启用双重量化策略。在降低位宽的同时，尽可能保留更多的信息。
-            bnb_4bit_quant_type="nf4",
-            llm_int8_threshold=6.0,
-            llm_int8_has_fp16_weight=False,  # 指示权重是否以 FP16 格式存储。
-        )
-    else:
 
-        quantization_config = None
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,  # 量化过程中使用的计算数据类型。
+        bnb_4bit_use_double_quant=True,  # 这个参数启用双重量化策略。在降低位宽的同时，尽可能保留更多的信息。
+        bnb_4bit_quant_type="nf4",
+        llm_int8_threshold=6.0,
+        llm_int8_has_fp16_weight=False,  # 指示权重是否以 FP16 格式存储。
+    )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,  # 指定模型的名称或模型文件的路径。
@@ -237,45 +235,45 @@ def prepare_generation_config():
     :return: 返回这个配置对象，使其可以在其他部分的应用中用于控制文本生成行为。
     """
     with st.sidebar:  # 语句指定接下来的 Streamlit 组件将显示在应用的侧边栏中。
-        # TODO 修改这部分逻辑，加入pdf文件的上传、下载等，并编写对应的逻辑
+        st.title('🐳请在此处上传论文~')
+        uploaded_paper = st.file_uploader("请上传论文（PDF）", type=['pdf'])
+        if uploaded_paper is not None:
+            with open(os.path.join("tmp", uploaded_paper.name), "wb") as f:
+                f.write(uploaded_paper.getbuffer())
+            st.success("🗂️论文上传成功：{}".format(uploaded_paper.name))
+
+            uploaded_code = st.file_uploader("🐳请上传论文对应的Python代码（PY）", type=['py'])
+            if uploaded_code is not None:
+                code_path = os.path.join("tmp", uploaded_code.name)
+                with open(code_path, "wb") as f:
+                    f.write(uploaded_code.getbuffer())
+                st.success("🗂️代码上传成功：{}".format(uploaded_code.name))
+
+                # 显示进度条并分析代码
+                with st.spinner('正在分析代码...'):
+                    analysis_result = analyze_code(code_path)
+                    st.success("分析完成")
+
+                # 允许下载分析后的代码
+                st.download_button(
+                    label="下载代码",
+                    data=uploaded_code.getvalue(),
+                    file_name=uploaded_code.name,
+                    mime='text/plain'
+                )
         st.title('参数面板')
-        max_new_tokens = st.slider('最大回复长度', 100, 8192, 660, step=8)  # 控制生成的最大长度。
+        max_new_tokens = st.slider('最大回复长度', 100, 32768, 8192, step=32)  # 控制生成的最大长度。
         top_p = st.slider('Top P', 0.0, 1.0, 0.8, step=0.01)  # 设置采样的 softmax 概率阈值，用于控制文本多样性。
         temperature = st.slider('温度系数', 0.0, 1.0, 0.7, step=0.01)  # 调节随机性的大小，影响生成文本的一致性和多样性。
         repetition_penalty = st.slider("重复惩罚系数", 1.0, 2.0, 1.07, step=0.01)  # 用于降低重复内容的发生。
         st.button('重置聊天', on_click=on_btn_click)  # 创建一个按钮，当被点击时触发 on_btn_click 函数，该函数可以用来重置聊天状态或清除会话数据。
-        # 上传论文：
-        uploaded_paper = st.file_uploader("上传论文", type=['pdf'])
-        if uploaded_paper is not None:
-            with open(os.path.join("tmp", uploaded_paper.name), "wb") as f:
-                f.write(uploaded_paper.getbuffer())
-            st.success("论文上传成功：{}".format(uploaded_paper.name))
-
-        uploaded_code = st.file_uploader("上传Python代码", type=['py'])
-        if uploaded_code is not None:
-            code_path = os.path.join("tmp", uploaded_code.name)
-            with open(code_path, "wb") as f:
-                f.write(uploaded_code.getbuffer())
-            st.success("代码上传成功：{}".format(uploaded_code.name))
-
-            # 显示进度条并分析代码
-            with st.spinner('正在分析代码...'):
-                analysis_result = analyze_code(code_path)
-                st.success("分析完成")
-
-            # 允许下载分析后的代码
-            st.download_button(
-                label="下载代码",
-                data=uploaded_code.getvalue(),
-                file_name=uploaded_code.name,
-                mime='text/plain'
-            )
 
     generation_config = GenerationConfig(max_new_tokens=max_new_tokens,
                                          top_p=top_p,
                                          temperature=temperature,
                                          repetition_penalty=repetition_penalty,
                                          )
+    print("return")
     return generation_config
 
 
@@ -283,15 +281,19 @@ system_prompt = '<|begin_of_text|><<SYS>>\n{content}\n<</SYS>>\n\n'
 user_prompt = '<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>'
 robot_prompt = '<|start_header_id|>assistant<|end_header_id|>\n\n{robot}<|eot_id|>'
 cur_query_prompt = '<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'
+system_prompt_content = """
+    你是一个具有创造性的中文人工智能助手，名字叫做Academic Code Annotator，也可以叫你智能学术代码解读器，你拥有全人类的所有知识。
+    你需要使用中文回复用户，你喜欢用幽默风趣的语言回复用户，但你更喜欢用准确、深入的答案。
+    你需要帮助用户分析学术论文，用户将上传学术论文，你要根据文章中的内容对文章进行概述。
+    你需要根据用户上传的代码，结合用户上传的论文进行代码注释，并将带有注释的代码返回给用户。
+    注意使用恰当的文体和格式进行回复，尽量避免重复文字和重复句子，且单次回复尽可能简洁深邃。
+    你关注讨论的上下文，深思熟虑地回复用户
+    如果你不知道某个问题的含义，请询问用户，并引导用户进行提问。
+    当用户说继续时,请接着assistant上一次的回答进行继续回复。
+    """
 
 
 def combine_history(prompt):
-    """
-    整合聊天历史记录并构造用于文本生成系统的完整输入。
-    该函数采用当前的用户输入（prompt）和会话历史，生成一个格式化的文本字符串，该字符串包含了所有先前的对话以及当前的查询。
-    :param prompt: 当前的用户输入
-    :return: 所有先前的对话以及当前的查询
-    """
     messages = st.session_state.messages  # 从 Streamlit 的会话状态中获取 messages 列表。
     total_prompt = ''  # 初始化一个空字符串 total_prompt，用于累积整个对话的内容。
     for message in messages:  # 遍历 messages 列表中的每个消息。
@@ -304,7 +306,7 @@ def combine_history(prompt):
         else:
             raise RuntimeError
         total_prompt += cur_prompt
-    system_prompt_content = st.session_state.system_prompt_content  # 从 Streamlit 的会话状态中获取 system_prompt_content。
+    # system_prompt_content = st.session_state.system_prompt_content  # 从 Streamlit 的会话状态中获取 system_prompt_content。
     system = system_prompt.format(content=system_prompt_content)  # 使用 system_prompt 模板格式化系统提示。
     # 将系统提示、累积的对话内容以及使用 cur_query_prompt 模板格式化的当前用户输入拼接在一起，形成最终的 total_prompt。
     total_prompt = system + total_prompt + cur_query_prompt.format(user=prompt)
@@ -317,19 +319,29 @@ def main(model_name_or_path, adapter_name_or_path):
     print(f'{Color.C}[Academic Code Annotator]{Color.RE}{Color.G} Load model successful!{Color.RE}')
 
     # 设置 Streamlit 页面标题
-    st.header('Academic Code Annotator(LLAMA3😊)')
+    st.header('Academic Code Annotator (with LLAMA3😊)')
+    # 使用Markdown和HTML标签来自定义标题样式
+    st.markdown("""
+    <style>
+    .custom-font {
+        font-size:20px;  # 可以调整字体大小
+        font-weight: bold;  # 字体加粗
+    }
+    </style>
+    <h5 class="custom-font">基于LLAMA3的学术代码解读器 👈请在左边上传论文和代码~</h5>
+    """, unsafe_allow_html=True)
 
     # 调用 prepare_generation_config 函数来设置并获取文本生成的配置参数。
     generation_config = prepare_generation_config()
 
-    # # 初始化聊天历史 (本工作暂时不考虑历史消息)
-    # if 'messages' not in st.session_state:
-    #     st.session_state.messages = []
+    # 初始化聊天历史 (本工作暂时不考虑历史消息)
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
 
-    # # 显示历史聊天消息
-    # for message in st.session_state.messages:
-    #     with st.chat_message(message['role']):
-    #         st.markdown(message['content'])
+    # 显示历史聊天消息
+    for message in st.session_state.messages:
+        with st.chat_message(message['role']):
+            st.markdown(message['content'])
 
     # Accept user input
     if prompt := st.chat_input('🐳你好！上传论文和对应的代码，我就可以帮你分析喔~😉'):  # 使用 st.chat_input 获取用户的输入。
