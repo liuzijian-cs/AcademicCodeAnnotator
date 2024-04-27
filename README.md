@@ -18,12 +18,12 @@ streamlit run web_chat.py /path/to/model
 
 ## 目录结构：
 
-|- files: 基础文件
-|- tmp: 临时目录，用于上传下载文件
-|- utils: 工具包
-    |- PDFplumber: PDF文件读取算法
-    |- base_function.py: 基础功能
-|- web_aca.py: Academic Code Annotator (with LLAMA3)
+|- files: 基础文件\
+|- tmp: 临时目录，用于上传下载文件\
+|- utils: 工具包\
+    |- PDFplumber: PDF文件读取算法\
+    |- base_function.py: 基础功能\
+|- web_aca.py: Academic Code Annotator (with LLAMA3)\
 |- web_chat.py: 基础聊天页面(with LLAMA3)
 
 ## 运行结果：
