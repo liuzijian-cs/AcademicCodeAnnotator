@@ -51,3 +51,13 @@ streamlit run web_chat.py /path/to/model
 3. 代码下载：
 
 ![](./files/pic/readme_result_4.png)
+
+## 团队成员：
+
+<a href="https://github.com/liuzijian-cs/AcademicCodeAnnotator/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=liuzijian-cs/AcademicCodeAnnotator" />
+</a>
+
+<a href="https://github.com/liuzijian-cs/AcademicCodeAnnotator/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=OneMiTang/AcademicCodeAnnotator" />
+</a>
