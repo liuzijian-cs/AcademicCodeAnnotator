@@ -61,3 +61,6 @@ streamlit run web_chat.py /path/to/model
 <a href="https://github.com/liuzijian-cs/AcademicCodeAnnotator/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=OneMiTang/AcademicCodeAnnotator" />
 </a>
+
+- liuzijian-cs@shu.edu.cn
+- skr@shu.edu.cn
